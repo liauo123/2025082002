@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>雙人笑容對決（圓環顯示｜2×3 照片牆）</title>
+  <style>
+    :root { --bg:#0b1020; --panel:#11162a; --ink:#e6eefc; --muted:#8ea1c0; --accent:#61dafb; --win:#35e085; --lose:#ff5c7a; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Microsoft JhengHei", Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--ink); }
+    header { padding: 14px 16px; background: linear-gradient(180deg, #0f1630, #0b1020); position: sticky; top:0; z-index: 5; border-bottom: 1px solid #1b2441; }
+    header h1 { margin:0; font-size: 20px; letter-spacing: .5px; }
+    .wrap { padding: 16px; display: grid; gap: 16px; }
+    .grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+    @media (min-width: 1150px) { .grid { grid-template-columns: 2fr 1fr; } }
+
+    .card { background: var(--panel); border:1px solid #1b2441; border-radius: 16px; padding: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+    .videoWrap { position: relative; border-radius: 12px; overflow: hidden; }
+    video, canvas { display: block; width: 100%; height: auto; }
+    video { filter: saturate(1.05); background: #000; }
+    canvas.overlay { position: absolute; left:0; top:0; pointer-events: none; }
+    .mirror { transform: scaleX(-1); }
+
+    .row { display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
+    .pill { padding: 8px 12px; border-radius: 999px; background: #0e1a33; border:1px solid #1b2a55; color: var(--ink); font-size: 14px; }
+    .btn { cursor:pointer; padding:10px 14px; border-radius:12px; border:1px solid #25407a; background:#14244b; color:#d9e6ff; font-weight:600; }
+    .btn:disabled { opacity:.6; cursor:not-allowed; }
+    .pill select { background:transparent; color:var(--ink); border:none; font:inherit; }
+
+    .hud { display:grid; grid-template-columns: repeat(3, 1fr); gap:10px; margin-top:10px; }
+    .hudItem { background:#0e1631; border:1px solid #22356c; border-radius:12px; padding:10px; text-align:center; }
+    .hudItem b { font-size:20px; }
+
+    #toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); background:#0f1c38; color:#eaf3ff; border:1px solid #233a70; border-radius: 12px; padding:10px 14px; box-shadow:0 12px 30px rgba(0,0,0,.35); opacity:0; pointer-events:none; transition: opacity .25s ease; }
+    #toast.show { opacity:1; }
+
+    /* 右側 2×3 照片牆 */
+    .gallery { display:grid; grid-template-columns:repeat(2,1fr); grid-template-rows:repeat(3,auto); gap:10px; }
+    .shot { position:relative; width:100%; aspect-ratio:4/3; background:#000; border:1px solid #22356c; border-radius:10px; overflow:hidden; }
+    .shot img { width:100%; height:100%; object-fit:cover; display:block; opacity:0; transition:opacity .25s ease; }
+    .shot .cap { position:absolute; left:6px; bottom:6px; padding:2px 6px; font-size:12px; background:rgba(0,0,0,.45); border:1px solid rgba(255,255,255,.15); border-radius:6px; color:#e6eefc; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>雙人笑容對決（圓環顯示｜2×3 照片牆）</h1>
+  </header>
+
+  <div class="wrap">
+    <div class="grid">
+      <!-- 左：相機與疊圖 -->
+      <section class="card">
+        <div class="row" style="justify-content: space-between; margin-bottom:10px;">
+          <div class="row">
+            <button id="btnStart" class="btn">▶ 開始偵測</button>
+            <button id="btnStop" class="btn" disabled>⏹ 停止</button>
+            <button id="btnRound" class="btn" disabled>🏁 開始回合</button>
+            <label class="pill"><input type="checkbox" id="chkRear" /> 使用後鏡頭</label>
+            <label class="pill"><input type="checkbox" id="chkMirror" checked /> 鏡像視圖</label>
+            <label class="pill">微笑模式
+              <select id="selMode">
+                <option value="strict">嚴格</option>
+                <option value="medium" selected>中等</option>
+                <option value="lenient">寬鬆</option>
+              </select>
+            </label>
+          </div>
+          <div class="pill">畫面僅顯示：<b>笑容圓環＋百分比</b>；達標即拍，冷卻 3 秒。</div>
+        </div>
+
+        <div class="videoWrap">
+          <video id="video" playsinline muted></video>
+          <canvas id="canvas" class="overlay"></canvas>
+        </div>
+
+        <div class="hud">
+          <div class="hudItem">FPS<br><b id="statFps">–</b></div>
+          <div class="hudItem">偵測臉部<br><b id="statFaces">–</b></div>
+          <div class="hudItem">狀態<br><b id="statTimer">—</b></div>
+        </div>
+      </section>
+
+      <!-- 右：照片牆 -->
+      <aside class="card">
+        <h3 style="margin:6px 0 10px;">照片牆（2×3，循環覆寫）</h3>
+        <div id="gallery" class="gallery"></div>
+      </aside>
+    </div>
+
+    <section class="card">
+      <h3 style="margin:6px 0 12px;">紀錄條件</h3>
+      <ul>
+        <li>依「嚴格／中等／寬鬆」模式判斷微笑是否達標。</li>
+        <li>存圖後<b>暫停 3 秒</b>再繼續偵測。</li>
+      </ul>
+    </section>
+  </div>
+
+  <div id="toast">提示</div>
+  <footer style="text-align:center; color:#8ea1c0; font-size:12px; padding: 8px 0 24px;">
+    模型在本機端執行；相機畫面不會上傳伺服器。
+  </footer>
+
+  <!-- 依賴 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js"></script>
+
+  <script>
+    // ==== DOM ====
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    const btnStart = document.getElementById('btnStart');
+    const btnStop  = document.getElementById('btnStop');
+    const btnRound = document.getElementById('btnRound');
+    const chkRear  = document.getElementById('chkRear');
+    const chkMirror= document.getElementById('chkMirror');
+    const selMode  = document.getElementById('selMode');
+
+    const statFps   = document.getElementById('statFps');
+    const statFaces = document.getElementById('statFaces');
+    const statTimer = document.getElementById('statTimer');
+
+    const galleryEl = document.getElementById('gallery');
+    const toast = document.getElementById('toast');
+
+    // ==== 狀態 ====
+    let running=false, stream=null, detections=[];
+    let lastFrameTime=performance.now(), fps=0;
+    let detectOptions=null, modelsLoaded=false;
+    let DETECT_MS=140, lastDetectAt=0;
+
+    // 照片牆
+    const GALLERY_SLOTS=6; let galleryIdx=0;
+
+    // 冷卻
+    const COOLDOWN_MS=3000; let cooldownUntil=0;
+    const inCooldown = ()=> performance.now() < cooldownUntil;
+
+    // 三段門檻
+    const SMILE_PRESETS = {
+      strict:  { happy:0.85, wMin:0.30, hMin:0.09 },
+      medium:  { happy:0.70, wMin:0.28, hMin:0.07 },
+      lenient: { happy:0.55, wMin:0.26, hMin:0.05 }
+    };
+    const getPreset = ()=> SMILE_PRESETS[selMode.value] || SMILE_PRESETS.medium;
+
+    // ==== UI ====
+    function showToast(msg, ms=1200){
+      toast.textContent = msg; toast.classList.add('show');
+      clearTimeout(showToast._t); showToast._t=setTimeout(()=>toast.classList.remove('show'), ms);
+    }
+    function resizeCanvas(){
+      const w=video.videoWidth||640, h=video.videoHeight||480;
+      canvas.width=w; canvas.height=h;
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+    }
+    function applyMirror(){ [video, canvas].forEach(el=> el.classList.toggle('mirror', chkMirror.checked)); }
+    function calcDetectParams(){
+      const minDim=Math.min(video.videoWidth, video.videoHeight) || 480;
+      const sz = minDim>=900?320:(minDim>=600?224:160);
+      detectOptions=new faceapi.TinyFaceDetectorOptions({ inputSize:sz, scoreThreshold:0.5 });
+      DETECT_MS = (sz>=320)?160:(sz>=224?140:120);
+    }
+
+    // ==== 照片牆 ====
+    function initGallery(){
+      galleryEl.innerHTML='';
+      for(let i=0;i<GALLERY_SLOTS;i++){
+        const cell=document.createElement('div'); cell.className='shot';
+        const img=document.createElement('img'); img.alt=`shot-${i+1}`;
+        const cap=document.createElement('div'); cap.className='cap'; cap.textContent='—';
+        cell.appendChild(img); cell.appendChild(cap);
+        galleryEl.appendChild(cell);
+      }
+      galleryIdx=0;
+    }
+    function pushGallery(dataUrl, meta){
+      const cells=galleryEl.querySelectorAll('.shot');
+      if(!cells.length) return;
+      const cell=cells[galleryIdx % GALLERY_SLOTS];
+      const img=cell.querySelector('img');
+      const cap=cell.querySelector('.cap');
+      let loaded=false;
+      img.onload=()=>{ loaded=true; img.style.opacity='1'; };
+      img.style.opacity='0'; img.src=''; requestAnimationFrame(()=>{ img.src=dataUrl; });
+      cap.textContent=meta;
+      galleryIdx++;
+      setTimeout(()=>{ if(!loaded) img.style.opacity='1'; }, 300);
+    }
+
+    // ==== Camera / Models ====
+    async function startCamera(){
+      if(!navigator.mediaDevices?.getUserMedia){ showToast('此瀏覽器不支援攝影機存取'); return; }
+      const facingMode = chkRear.checked ? 'environment' : 'user';
+      const constraints={ video:{facingMode, width:{ideal:1280}, height:{ideal:720}}, audio:false };
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject=stream; await video.play();
+      resizeCanvas(); applyMirror(); calcDetectParams();
+    }
+    function stopCamera(){
+      if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+      video.srcObject=null;
+    }
+    async function loadModels(){
+      if(modelsLoaded) return;
+      const URL='https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+      await faceapi.nets.tinyFaceDetector.loadFromUri(URL);
+      await faceapi.nets.faceLandmark68Net.loadFromUri(URL);
+      await faceapi.nets.faceExpressionNet.loadFromUri(URL);
+      modelsLoaded=true;
+    }
+
+    // ==== 判斷微笑（僅用於觸發與圓環百分比） ====
+    function isSmileByMode(det){
+      if(!det) return {ok:false, happy:0};
+      const P = getPreset();
+      const happy = Math.max(0, Math.min(1, (det.expressions?.happy)||0));
+      const lm = det.landmarks.positions;
+      const d = (i,j)=> Math.hypot(lm[i].x - lm[j].x, lm[i].y - lm[j].y);
+
+      const mouthW = d(48,54);
+      const mouthH = d(51,57);
+      const faceW  = d(0,16);
+      const faceH  = Math.hypot(lm[8].x - lm[27].x, lm[8].y - lm[27].y) * 1.5;
+
+      const wNorm = mouthW / (faceW + 1e-6);
+      const hNorm = mouthH / (faceH + 1e-6);
+
+      const ok = (happy >= P.happy) && (wNorm >= P.wMin) && (hNorm >= P.hMin);
+      return {ok, happy};
+    }
+
+    // ==== 圓環（臉上方，無方框／無條形圖） ====
+    function drawRing(cx, cy, r, pct, ok){
+      const line=Math.max(6, Math.round(r*0.10));
+      // 背景圈
+      ctx.lineWidth=line; ctx.strokeStyle='rgba(120,150,200,.35)';
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.stroke();
+      // 進度
+      const a0=-Math.PI/2, a1=a0 + pct*2*Math.PI;
+      ctx.strokeStyle = ok? 'rgba(53,224,133,.95)' : 'rgba(90,120,181,.95)';
+      ctx.lineCap='round'; ctx.beginPath(); ctx.arc(cx, cy, r, a0, a1); ctx.stroke();
+
+      // === 鏡像數字：只鏡像文字，不鏡像圓環 ===
+      ctx.save();
+      ctx.translate(cx*2, 0);       // 以 cx 為鏡像軸
+      ctx.scale(-1, 1);             // 水平鏡像
+      ctx.fillStyle = ok? '#caffdb' : '#d7e2ff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `bold ${Math.round(r*0.9)}px "Microsoft JhengHei", system-ui`;
+      ctx.fillText(Math.round(pct*100), cx, cy+1);
+      ctx.font = `bold ${Math.round(r*0.35)}px "Microsoft JhengHei", system-ui`;
+      ctx.fillText('%', cx + r*0.7, cy - r*0.15);
+      ctx.restore();
+    }
+    function drawFaceRings(){
+      const faces=(detections||[]).slice().sort((a,b)=> a.detection.box.x - b.detection.box.x);
+      faces.forEach(det=>{
+        const b=det.detection.box;
+        const cx=b.x + b.width/2;
+        const r = Math.max(22, Math.min(64, Math.min(b.width, b.height) * 0.35));
+        let cy = b.y - r*0.6; if(cy - r < 6) cy = r + 6;
+        const {ok, happy}=isSmileByMode(det);
+        drawRing(cx, cy, r, Math.max(0, Math.min(1, happy)), ok);
+      });
+    }
+
+    // ==== 擷取臉（與鏡像一致） ====
+    function captureFace(det){
+      const b=det.detection.box, expand=0.25;
+      const cx=b.x+b.width/2, cy=b.y+b.height/2;
+      const w=b.width*(1+expand), h=b.height*(1+expand);
+      let x=Math.max(0, cx-w/2), y=Math.max(0, cy-h/2);
+      let x2=Math.min(canvas.width, x+w), y2=Math.min(canvas.height, y+h);
+      const cropW=Math.max(1, Math.floor(x2-x)), cropH=Math.max(1, Math.floor(y2-y));
+
+      const off=document.createElement('canvas'); off.width=canvas.width; off.height=canvas.height;
+      const octx=off.getContext('2d');
+      const mirrored = chkMirror.checked;
+      if(mirrored){ octx.translate(off.width,0); octx.scale(-1,1); }
+      octx.drawImage(video, 0,0,off.width, off.height);
+      if(mirrored){ x = off.width - (x + cropW); }
+
+      const out=document.createElement('canvas'); out.width=cropW; out.height=cropH;
+      out.getContext('2d').drawImage(off, x,y,cropW,cropH, 0,0,cropW,cropH);
+      return out.toDataURL('image/png');
+    }
+
+    // ==== 偵測／存圖 ====
+    async function maybeDetect(now){
+      if(!running || !modelsLoaded) return;
+      if(inCooldown()) return;
+      if(now - lastDetectAt < DETECT_MS) return;
+      lastDetectAt=now;
+
+      try{
+        detections = await faceapi
+          .detectAllFaces(video, detectOptions)
+          .withFaceLandmarks()
+          .withFaceExpressions();
+        statFaces.textContent = detections.length;
+
+        if(detections.length>0){
+          // 從達標者中挑 happy 最高者
+          let best=null, bestHappy=-1, who='P?';
+          const faces=detections.slice().sort((a,b)=> a.detection.box.x - b.detection.box.x);
+          faces.forEach((det, idx)=>{
+            const {ok, happy}=isSmileByMode(det);
+            if(ok && happy>bestHappy){ best=det; bestHappy=happy; who=(idx===0?'P1':'P2'); }
+          });
+          if(best){
+            const dataUrl=captureFace(best);
+            pushGallery(dataUrl, `${who} · ${new Date().toLocaleTimeString()}`);
+            cooldownUntil = performance.now() + COOLDOWN_MS;
+            showToast('已記錄笑容 ✓ 暫停 3 秒');
+          }
+        }
+      }catch(e){ console.warn('detect error', e); }
+    }
+
+    // ==== 主迴圈（只畫圓環） ====
+    function loop(now){
+      if(!running) return;
+      const dt=now-lastFrameTime; lastFrameTime=now;
+      fps=Math.round(1000/Math.max(1,dt)); statFps.textContent=fps;
+
+      // 冷卻狀態
+      if(inCooldown()){
+        const left = Math.max(0, cooldownUntil - performance.now());
+        statTimer.textContent = `暫停 ${(left/1000).toFixed(1)}s`;
+      } else {
+        statTimer.textContent = '—';
+      }
+
+      ctx.clearRect(0,0,canvas.width, canvas.height);
+      drawFaceRings(); // ★ 只畫圓環，沒有方框／橫條圖
+
+      requestAnimationFrame(loop);
+      maybeDetect(now);
+    }
+
+    // ==== 啟停 ====
+    async function startAll(){
+      if(running) return;
+      try{
+        btnStart.disabled=true; btnStop.disabled=true; btnRound.disabled=true;
+        initGallery(); showToast('載入模型中…');
+        await startCamera(); await loadModels();
+        // 預熱
+        try{
+          await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({ inputSize:160, scoreThreshold:0.5 }))
+            .withFaceLandmarks().withFaceExpressions();
+        }catch(e){}
+        running=true; btnStop.disabled=false; btnRound.disabled=false;
+        showToast('開始偵測');
+        lastFrameTime=performance.now();
+        requestAnimationFrame(loop);
+      }catch(e){
+        console.error(e);
+        showToast('啟動失敗，請檢查相機權限/網路');
+        btnStart.disabled=false; btnStop.disabled=true; btnRound.disabled=true;
+        stopAll(true);
+      }
+    }
+    function stopAll(silent=false){
+      if(!silent) showToast('已停止');
+      running=false; stopCamera();
+      statFps.textContent='–'; statFaces.textContent='–';
+      ctx.clearRect(0,0,canvas.width, canvas.height);
+      btnStart.disabled=false; btnStop.disabled=true; btnRound.disabled=true;
+    }
+
+    // ==== 事件 ====
+    btnStart.addEventListener('click', startAll);
+    btnStop.addEventListener('click', ()=> stopAll());
+    btnRound.addEventListener('click', ()=> showToast('回合功能未改動（視覺不顯示方框/橫條）'));
+    chkRear.addEventListener('change', async ()=>{ if(running){ try{ await startCamera(); }catch(e){} }});
+    chkMirror.addEventListener('change', applyMirror);
+    window.addEventListener('resize', ()=>{ if(video.videoWidth){ resizeCanvas(); calcDetectParams(); }});
+    video.addEventListener('loadedmetadata', ()=>{ resizeCanvas(); calcDetectParams(); });
+
+    if(!('mediaDevices' in navigator && 'getUserMedia' in navigator.mediaDevices)){
+      showToast('此瀏覽器不支援攝影機存取'); btnStart.disabled=true;
+    }
+  </script>
+</body>
+</html>
